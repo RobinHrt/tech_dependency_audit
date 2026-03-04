@@ -1,0 +1,10 @@
+[package]
+name = "dependency_audit"
+address = "github.com/RobinHrt/tech_dependency_audit"
+version = "1.0.0"
+description = "Security and License Auditor: parallel vulnerability scan and license analysis with risk assessment"
+license = "MIT"
+main_pipe = "audit_dependencies"
+
+[exports.tech_dependency_audit]
+pipes = ["audit_dependencies", "parallel_audit", "scan_vulnerabilities", "analyze_licenses", "compile_audit_report"]
