@@ -1,0 +1,152 @@
+domain      = "tech_dependency_audit"
+description = "Security & License Auditor: takes a lockfile and project context to produce a structured audit report with vulnerability findings, license compatibility, and risk assessment"
+main_pipe   = "audit_dependencies"
+
+# --- Concepts ---
+
+[concept.VulnerabilityFlag]
+description = "A security vulnerability found in a dependency"
+
+[concept.VulnerabilityFlag.structure]
+package_name = {type = "text", description = "Name of the vulnerable package", required = true}
+package_version = {type = "text", description = "Version of the vulnerable package", required = true}
+severity = {type = "text", description = "Vulnerability severity", required = true, choices = ["critical", "high", "medium", "low"]}
+vulnerability_type = {description = "Type of vulnerability", choices = ["RCE", "XSS", "SQL_injection", "path_traversal", "DoS", "information_disclosure", "privilege_escalation", "other"]}
+description = {type = "text", description = "Description of the vulnerability", required = true}
+fixed_version = "Version that fixes the vulnerability"
+recommendation = {type = "text", description = "Recommended action", required = true, choices = ["upgrade_immediately", "upgrade_soon", "monitor", "replace_package", "accept_risk"]}
+
+[concept.LicenseInfo]
+description = "License details and compatibility assessment for a dependency"
+
+[concept.LicenseInfo.structure]
+package_name = {type = "text", description = "Name of the package", required = true}
+license_id = {type = "text", description = "SPDX license identifier", required = true}
+compatibility = {type = "text", description = "License compatibility classification", required = true, choices = ["permissive", "weak_copyleft", "strong_copyleft", "proprietary", "unknown"]}
+risk_notes = "Legal obligations or risk notes"
+
+[concept.AuditReport]
+description = "Complete dependency audit report with vulnerability findings, license analysis, and risk assessment"
+
+[concept.AuditReport.structure]
+project_name = {type = "text", description = "Name of the project being audited", required = true}
+total_dependencies = {type = "integer", description = "Total number of dependencies analyzed", required = true}
+critical_count = {type = "integer", description = "Number of critical vulnerabilities", required = true}
+high_count = {type = "integer", description = "Number of high vulnerabilities", required = true}
+license_risk_count = {type = "integer", description = "Number of license risks found", required = true}
+vulnerabilities = {type = "list", item_type = "concept", item_concept_ref = "tech_dependency_audit.VulnerabilityFlag", description = "All vulnerability findings"}
+license_findings = {type = "list", item_type = "concept", item_concept_ref = "tech_dependency_audit.LicenseInfo", description = "All license findings"}
+overall_risk = {type = "text", description = "Overall risk assessment", required = true, choices = ["critical", "high", "moderate", "low", "clean"]}
+executive_summary = {type = "text", description = "Executive summary of the audit", required = true}
+immediate_actions = {type = "list", item_type = "text", description = "Actions required for critical and high findings"}
+recommended_upgrades = {type = "list", item_type = "text", description = "Prioritized upgrade recommendations"}
+
+# --- Pipes ---
+
+[pipe.audit_dependencies]
+type = "PipeSequence"
+description = "Main pipeline: runs parallel vulnerability and license audits then compiles the audit report"
+inputs = {lockfile = "Text", project_context = "Text"}
+output = "AuditReport"
+steps = [
+    {pipe = "parallel_audit", result = "audit_results"},
+    {pipe = "compile_audit_report", result = "audit_report"},
+]
+
+[pipe.parallel_audit]
+type = "PipeParallel"
+description = "Run vulnerability scan and license analysis in parallel"
+inputs = {lockfile = "Text", project_context = "Text"}
+output = "AuditReport"
+add_each_output = true
+branches = [
+    {pipe = "scan_vulnerabilities", result = "vulnerabilities"},
+    {pipe = "analyze_licenses", result = "license_findings"},
+]
+
+[pipe.scan_vulnerabilities]
+type = "PipeLLM"
+description = "Security scan of dependencies for known vulnerabilities, outdated packages, and maintenance risks"
+inputs = {lockfile = "Text", project_context = "Text"}
+output = "VulnerabilityFlag[]"
+model = "$engineering-structured"
+prompt = """
+You are a security engineer auditing project dependencies.
+
+Project context:
+@project_context
+
+Lockfile:
+@lockfile
+
+Flag packages with:
+- Known vulnerabilities (CVEs or common vulnerability patterns)
+- Significantly outdated versions (2+ major versions behind)
+- Unmaintained packages (no updates in 2+ years)
+- Bus-factor risks (single maintainer on critical packages)
+
+For each finding provide:
+- package_name and package_version
+- severity: critical (actively exploited), high (exploitable), medium (theoretical risk), low (minor concern)
+- vulnerability_type: RCE, XSS, SQL_injection, path_traversal, DoS, information_disclosure, privilege_escalation, or other
+- description: What the vulnerability is and how it could be exploited
+- fixed_version: If known
+- recommendation: upgrade_immediately, upgrade_soon, monitor, replace_package, or accept_risk
+
+Be precise. Only flag real risks with concrete evidence.
+"""
+
+[pipe.analyze_licenses]
+type = "PipeLLM"
+description = "Classify each dependency license and flag non-permissive licenses with legal obligations"
+inputs = {lockfile = "Text", project_context = "Text"}
+output = "LicenseInfo[]"
+model = "$engineering-structured"
+prompt = """
+You are a compliance engineer auditing dependency licenses.
+
+Project context:
+@project_context
+
+Lockfile:
+@lockfile
+
+For each dependency, classify its license:
+- package_name: The package name
+- license_id: SPDX identifier (MIT, Apache-2.0, GPL-3.0, etc.)
+- compatibility: permissive (MIT, BSD, Apache), weak_copyleft (LGPL, MPL), strong_copyleft (GPL, AGPL), proprietary, or unknown
+- risk_notes: Legal obligations if not permissive (e.g., "LGPL requires dynamic linking or source disclosure")
+
+Flag anything that is not permissive. Note specific legal obligations for copyleft licenses. Mark unknown licenses as requiring manual review.
+"""
+
+[pipe.compile_audit_report]
+type = "PipeLLM"
+description = "Merge vulnerability and license analyses into a unified audit report with risk assessment"
+inputs = {vulnerabilities = "VulnerabilityFlag[]", license_findings = "LicenseInfo[]", project_context = "Text"}
+output = "AuditReport"
+model = "$engineering-structured"
+prompt = """
+You are compiling a dependency audit report from security and license analyses.
+
+Project context:
+@project_context
+
+Vulnerability findings:
+@vulnerabilities
+
+License findings:
+@license_findings
+
+Compile the audit report:
+- project_name: Infer from project context
+- total_dependencies: Count from the findings
+- critical_count / high_count: Count by severity
+- license_risk_count: Count non-permissive licenses
+- vulnerabilities: Include all vulnerability findings
+- license_findings: Include all license findings
+- overall_risk: critical (any critical vulns), high (any high vulns or strong copyleft), moderate (medium vulns or weak copyleft), low (only low vulns), clean (no issues)
+- executive_summary: 2-3 sentences for leadership
+- immediate_actions: Specific actions for critical/high findings
+- recommended_upgrades: Prioritized list of upgrades to perform
+"""

@@ -1,0 +1,14 @@
+{
+  "lockfile": {
+    "concept": "native.Text",
+    "content": {
+      "text": "text_value"
+    }
+  },
+  "project_context": {
+    "concept": "native.Text",
+    "content": {
+      "text": "text_value"
+    }
+  }
+}
